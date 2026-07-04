@@ -1,37 +1,39 @@
-# fly.toml file generated for y-webrtc-eu on 2023-03-16T15:02:47+01:00
+# fly.toml app configuration file generated for yaqat-p6txfl-nrt on 2026-07-04T21:30:09+09:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "y-webrtc-eu"
-kill_signal = "SIGINT"
-kill_timeout = 5
-processes = []
-
-[env]
+app = 'yaqat-p6txfl-nrt'
+primary_region = 'nrt'
+kill_signal = 'SIGINT'
+kill_timeout = '5s'
 
 [experimental]
   auto_rollback = true
 
-[[services]]
-  http_checks = []
+[build]
+
+[http_service]
   internal_port = 8080
-  processes = ["app"]
-  protocol = "tcp"
-  script_checks = []
-  [services.concurrency]
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = 'connections'
     hard_limit = 25
     soft_limit = 20
-    type = "connections"
 
-  [[services.ports]]
-    force_https = true
-    handlers = ["http"]
-    port = 80
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '1s'
+    method = 'GET'
+    path = '/'
 
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
-
-  [[services.tcp_checks]]
-    grace_period = "1s"
-    interval = "15s"
-    restart_limit = 0
-    timeout = "2s"
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 256

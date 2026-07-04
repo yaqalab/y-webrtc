@@ -124,7 +124,12 @@ const onconnection = conn => {
 wss.on('connection', onconnection)
 
 server.on('upgrade', (request, socket, head) => {
-  // You may check auth of request here..
+  const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+  if (url.searchParams.get('token') !== process.env.SIGNALING_TOKEN) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+    socket.destroy()
+    return
+  }
   /**
    * @param {any} ws
    */
