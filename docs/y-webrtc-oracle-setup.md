@@ -24,7 +24,8 @@ TLS via Caddy and Cloudflare.
 10. [Cloudflare DNS & Proxy](#10-cloudflare-dns--proxy)
 11. [Connect Your Client](#11-connect-your-client)
 12. [Capacity & Scaling Notes](#12-capacity--scaling-notes)
-13. [Troubleshooting](#13-troubleshooting)
+13. [Updating an Existing Deployment](#13-updating-an-existing-deployment)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -310,8 +311,12 @@ Press **Ctrl+C** to stop.
    signature + expiry offline and rate-limits new connections per identity.
 
 ```bash
-# Example: mint a key, then use it
+# Example: mint a key, then use it. The Origin header is required once Caddy is in
+# front (Section 9.2) — it 403s requests whose Origin doesn't match your domain,
+# including requests with none. Testing Node directly (http://localhost:4444)
+# needs no Origin.
 curl -X POST https://signal.yourdomain.com/register \
+  -H 'Origin: https://app.yourdomain.com' \
   -H 'x-app-token: YOUR_SIGNALING_TOKEN' \
   -H 'content-type: application/json' \
   -d '{"id":"user@example.com"}'
@@ -663,7 +668,152 @@ Ampere (or run Micro in cluster mode).
 
 ---
 
-## 13. Troubleshooting
+## 13. Updating an Existing Deployment
+
+Use this when you've already got a box running and want to pull a newer version of
+the server code from the repo (for example, moving an older single-token box up to
+the access-key + rate-limiting model in this guide).
+
+> **This particular update is a breaking change.** The old model connected the
+> WebSocket with the static token directly (`?token=<SIGNALING_TOKEN>`). The new
+> model requires the client to `POST /register` first and connect with the
+> **minted access key** (`?token=<key>`). A client still sending the raw token
+> gets `401` on the WS upgrade. **Update your client app in step with the server**
+> (see [Section 11](#11-connect-your-client)) — ideally deploy the client change
+> right after Step 13.5 verifies the server.
+>
+> The server also now **requires `ID_PEPPER` and `KEY_SECRET`** in addition to
+> `SIGNALING_TOKEN`, and **exits on startup** if any are missing. You must add them
+> to the service file (Step 13.3) *before* restarting, or the service won't come
+> back up.
+
+### 13.1 Pull the new code
+
+```bash
+cd ~/y-webrtc
+git pull
+npm install          # picks up new/optional deps; a safe no-op if nothing changed
+```
+
+> If `git pull` complains about local changes, you edited a tracked file in place
+> (config lives in the systemd unit, *not* the repo, so this is unusual). Inspect
+> with `git status`; `git stash` or `git checkout -- <file>` to discard, then pull.
+>
+> The SQLite registry (`data/registry.db`) is created automatically on first start
+> and is gitignored, so `git pull` never touches it — no manual data step.
+
+### 13.2 Check your Node version
+
+The default SQLite store uses the built-in `node:sqlite`, which needs **Node ≥ 22.5**:
+
+```bash
+node --version
+```
+
+If it's older, upgrade (otherwise the store won't load and the server won't start):
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt install -y nodejs
+```
+
+*(Alternatively, keep the old Node and set `STORE=redis` — see [Section 7.8](#78-access-keys-registry-store-and-allowlist).)*
+
+### 13.3 Add the new env vars to the service
+
+Your existing unit from [Section 8](#8-run-as-a-systemd-service) likely only sets
+`SIGNALING_TOKEN`. Edit it:
+
+```bash
+sudo nano /etc/systemd/system/y-webrtc.service
+```
+
+Add these lines under `[Service]` (generate each new secret with `openssl rand -hex 32`):
+
+```ini
+Environment=ID_PEPPER=PASTE_ID_PEPPER_HERE
+Environment=KEY_SECRET=PASTE_KEY_SECRET_HERE
+Environment=STORE=sqlite
+# The app's exact origin(s) so browser /register preflights pass. Comma-separate
+# multiple; loopback is always allowed.
+Environment=ALLOWED_ORIGINS=https://app.yourdomain.com
+```
+
+> **Reuse, don't regenerate, if you have a fallback.** `ID_PEPPER` and `KEY_SECRET`
+> must be **identical** on every instance a client connects to (Oracle primary +
+> local fallback) so a key minted anywhere verifies everywhere. If a fallback
+> already runs the new model, copy *its* values here. If this is your first box on
+> the new model, generate fresh values now and set the same ones on the fallback
+> when you upgrade it. `SIGNALING_TOKEN` can stay as-is.
+
+Save & exit (**Ctrl+O**, **Enter**, **Ctrl+X**).
+
+### 13.4 Reload & restart
+
+```bash
+sudo systemctl daemon-reload     # required: the unit file changed
+sudo systemctl restart y-webrtc
+sudo systemctl status y-webrtc   # should show "active (running)"
+```
+
+Confirm it started in the new model:
+
+```bash
+sudo journalctl -u y-webrtc -n 20 --no-pager
+# → Signaling server running on localhost: 4444 (store=sqlite, allowlist=off)
+```
+
+If instead you see `Missing required env var …`, you skipped a secret in Step 13.3.
+
+### 13.5 Smoke-test the new flow
+
+Mint a key end-to-end. Going through the public URL also exercises TLS, Caddy's
+Origin gate, and the CORS echo — but that gate means you **must send a matching
+`Origin` header**. A request with none is a `403` from Caddy (same as a foreign
+origin — a missing header fails the regex; see
+[Section 11.1](#111-restricting-access-by-origin)), so it never reaches `/register`:
+
+```bash
+curl -X POST https://signal.yourdomain.com/register \
+  -H 'Origin: https://app.yourdomain.com' \
+  -H 'x-app-token: YOUR_SIGNALING_TOKEN' \
+  -H 'content-type: application/json' \
+  -d '{"id":"test@example.com"}'
+# → {"key":"<payload>.<sig>","expiresAt":...}
+```
+
+> **Just want to check Node, without the proxy?** Run this on the box against
+> loopback — Caddy isn't involved and `/register` itself doesn't check Origin
+> (only the app token):
+> ```bash
+> curl -X POST http://localhost:4444/register \
+>   -H 'x-app-token: YOUR_SIGNALING_TOKEN' \
+>   -H 'content-type: application/json' \
+>   -d '{"id":"test@example.com"}'
+> ```
+
+A `200` with a `key` means the upgraded server is live. Now deploy the matching
+client change and confirm two browser windows still pair in the same room.
+
+### 13.6 Rolling back
+
+The previous version is one commit back:
+
+```bash
+cd ~/y-webrtc
+git log --oneline -5             # find the commit before the update
+git checkout <previous-commit>
+sudo systemctl restart y-webrtc
+```
+
+Because the client change is **coupled** to this update, a real rollback means
+reverting **both** the server *and* the client to the static-token model — a rolled-
+back server rejects the minted keys a new client sends. The added env vars are
+harmless if left in place (an older server just ignores the ones it doesn't read).
+
+---
+
+## 14. Troubleshooting
 
 | Symptom | Likely cause & fix |
 |---|---|
@@ -690,6 +840,15 @@ Ampere (or run Micro in cluster mode).
 sudo systemctl status y-webrtc      # check status
 sudo systemctl restart y-webrtc     # restart
 sudo journalctl -u y-webrtc -f      # live logs
+```
+
+**Update to the latest code** (full runbook in [Section 13](#13-updating-an-existing-deployment)):
+
+```bash
+cd ~/y-webrtc && git pull && npm install
+# first time on the access-key model? add ID_PEPPER, KEY_SECRET, STORE,
+# ALLOWED_ORIGINS to the unit — see Section 13.3
+sudo systemctl daemon-reload && sudo systemctl restart y-webrtc
 ```
 
 **Key file locations:**
