@@ -2,3 +2,6 @@ dist
 node_modules
 .vscode
 upload.sh
+.env
+data
+.claude/

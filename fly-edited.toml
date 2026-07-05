@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for yaqat-p6txfl-nrt on 2026-07-04T22:00:14+09:00
+# fly.toml app configuration file generated for yaqat-p6txfl-nrt on 2026-07-04T21:30:09+09:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -34,5 +34,6 @@ kill_timeout = '5s'
 
 [[vm]]
   memory = '256mb'
+  cpu_kind = 'shared'
   cpus = 1
   memory_mb = 256

@@ -21,6 +21,8 @@
   "scripts": {
     "clean": "rm -rf dist",
     "start": "node ./bin/server.js",
+    "dev": "node --env-file=.env --experimental-sqlite ./bin/server.js",
+    "allow": "node ./bin/allow.js",
     "debug": "concurrently 'http-server -o index.html' 'npm run watch'",
     "demo": "concurrently 'http-server -o demo/index.html' 'npm run watch'",
     "dist": "rollup -c",
@@ -79,7 +81,8 @@
     "yjs": "^13.6.8"
   },
   "optionalDependencies": {
-    "ws": "^8.14.2"
+    "ws": "^8.14.2",
+    "redis": "^4.7.0"
   },
   "engines": {
     "node": ">=12"
